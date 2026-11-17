@@ -1,0 +1,25 @@
+# Backend
+Backend/.env
+Backend/.venv/
+Backend/__pycache__/
+Backend/**/__pycache__/
+Backend/*.py[cod]
+Backend/.pytest_cache/
+Backend/.tmp/
+Backend/data/
+
+# Frontend
+Frontend/.gradle/
+Frontend/.idea/
+Frontend/.kotlin/
+Frontend/local.properties
+Frontend/**/build/
+Frontend/captures/
+Frontend/*.iml
+Frontend/*.jks
+Frontend/*.keystore
+
+# Editor / OS
+.cursor/
+.DS_Store
+Thumbs.db

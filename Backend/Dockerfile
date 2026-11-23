@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.title="Encrage" \
+      org.opencontainers.image.description="Encrage backend: client-side encrypted photo and video cloud (API + admin console)" \
+      org.opencontainers.image.source="https://github.com/alex-lm/Encrage" \
+      net.unraid.docker.icon="https://raw.githubusercontent.com/alex-lm/Encrage/main/Backend/app/console_static/icon.svg"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 

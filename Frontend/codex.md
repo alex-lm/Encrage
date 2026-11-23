@@ -170,6 +170,8 @@ Back from Backup or Settings returns to Photos; back during selection clears it.
 
 The Material theme uses accessible warm-neutral palettes for both light and system dark modes. Interactive primary colors contrast strongly with their content colors, surface levels are visibly separated, and the bottom navigation uses a neutral container with a high-contrast selected indicator. Gallery status badges use a dark scrim so white icons remain visible over both light and dark media.
 
+The launcher icon is an adaptive icon (`mipmap-anydpi/ic_launcher.xml` and `ic_launcher_round.xml`): an off-white `ic_launcher_background` colour, an ink drop with a keyhole cut out (`drawable/ic_launcher_foreground.xml`), and a matching `ic_launcher_monochrome` layer for Android 13+ themed icons. The admin console uses the same mark (`Backend/app/console_static/icon.svg`).
+
 The main UI starts a non-blocking cloud metadata sync and backup pass. `syncAllCloudPages` walks every cursor page (200 per page, at most 500 pages) from the newest item. Each remote item merges into the Room row that already owns its `mediaId`, otherwise the row with the same private fingerprint.
 
 ## Backend contract

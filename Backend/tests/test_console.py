@@ -173,6 +173,8 @@ def test_console_page_and_security_headers(apps) -> None:
     assert page.status_code == 200 and "Encrage Console" in page.text
     assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
     assert console.get("/static/console.js").status_code == 200
+    icon = console.get("/static/icon.svg")
+    assert icon.status_code == 200 and icon.headers["content-type"].startswith("image/svg+xml")
     assert console.get("/static/index.html").status_code == 404
     assert console.get("/docs").status_code == 404
 

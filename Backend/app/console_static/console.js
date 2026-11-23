@@ -224,7 +224,7 @@ function showLogin(setupRequired) {
     h("pre", {}, "docker compose exec encrage-console \\\n  python manage.py set-console-admin <name>"),
   ] : [h("p", {}, "Sign in with a console admin account. App users cannot sign in here.")];
   root.replaceChildren(h("div", { class: "login-wrap" },
-    h("div", { class: "card login" }, h("div", { class: "brand" }, h("span", { class: "brand-mark" }, "E"), "Encrage Console"),
+    h("div", { class: "card login" }, h("div", { class: "brand" }, h("img", { class: "brand-mark", src: "/static/icon.svg", alt: "" }), "Encrage Console"),
       ...setup, form)));
   form.elements.username.focus();
 }
@@ -242,7 +242,7 @@ function shell(content) {
   } }, "Sign out");
   root.replaceChildren(
     h("header", { class: "topbar" },
-      h("div", { class: "brand" }, h("span", { class: "brand-mark" }, "E"), "Encrage Console"), nav,
+      h("div", { class: "brand" }, h("img", { class: "brand-mark", src: "/static/icon.svg", alt: "" }), "Encrage Console"), nav,
       h("div", { class: "topbar-right" }, healthPill, h("span", { class: "muted" }, state.session.admin), logout)),
     h("main", {}, content));
 }

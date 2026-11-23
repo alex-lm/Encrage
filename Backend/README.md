@@ -76,6 +76,8 @@ The console is a separate FastAPI app (`app/console.py`, static page in `app/con
 
 Console admins are separate from app users and exist only in `console_admins`. Create them from the CLI with `set-console-admin`; the web page cannot create them. Sign-in sets an opaque session cookie, stored only as SHA-256 in `console_sessions`. The cookie is HttpOnly and SameSite=Strict, Secure over HTTPS, and expires after `ENCRAGE_CONSOLE_SESSION_HOURS` (12). After 5 failed attempts from one address in 15 minutes, sign-in is locked for that address, and after 30 failures in total it is locked for everyone. State-changing requests must send `X-Encrage-Console: 1` and pass a same-origin `Origin` check. Pages are served with a strict Content-Security-Policy and load no third-party code.
 
+The console's favicon and header mark are `app/console_static/icon.svg`, the same ink-drop mark as the Android launcher icon. The Dockerfile carries OCI labels (title, description, source) and a `net.unraid.docker.icon` label pointing at that SVG on GitHub, for container UIs that read it.
+
 Usage history works as follows:
 
 - **Uploads and sign-ins per day** come from `media.created_at` and `sessions.created_at`, so they cover data from before the console existed.

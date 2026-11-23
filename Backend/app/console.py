@@ -43,7 +43,7 @@ from .security import hash_password, hash_token, parse_utc, utc_iso, utc_now, ve
 COOKIE_NAME = "encrage_console"
 CSRF_HEADER = "x-encrage-console"
 STATIC_DIR = Path(__file__).parent / "console_static"
-STATIC_FILES = {"console.css": "text/css", "console.js": "text/javascript"}
+STATIC_FILES = {"console.css": "text/css", "console.js": "text/javascript", "icon.svg": "image/svg+xml"}
 DUMMY_ADMIN_HASH = hash_password("not-a-real-console-password")
 USAGE_WINDOWS = (7, 30, 90)
 PRUNE_INTERVAL_SECONDS = 3600

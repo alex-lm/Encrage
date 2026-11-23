@@ -102,15 +102,34 @@ class MediaRepository @Inject constructor(
         return DeleteResult(deleted, failures)
     }
 
-    /** Pulls one cursor page and merges it into Room. Room remains the only gallery source. */
-    suspend fun syncNextCloudPage(reset: Boolean = false) {
+    /** Capture times in gallery order, used to build date sections without loading full rows. */
+    fun timeline(mediaType: MediaType? = null, localState: LocalState? = null): Flow<List<Long>> =
+        mediaDao.observeTimeline(mediaType, localState)
+
+    fun recentFailureReasons(): Flow<List<String>> = mediaDao.observeRecentFailureReasons()
+
+    /**
+     * Walks every cursor page from the newest item and merges it into Room. Bounded so a misbehaving
+     * server cannot keep the loop alive forever. Room remains the only gallery source.
+     */
+    suspend fun syncAllCloudPages(maxPages: Int = MAX_SYNC_PAGES) {
+        var reset = true
+        repeat(maxPages) {
+            if (!syncNextCloudPage(reset)) return
+            reset = false
+        }
+    }
+
+    /** Pulls one cursor page and merges it into Room. Returns true while more pages remain. */
+    suspend fun syncNextCloudPage(reset: Boolean = false): Boolean {
         val savedCursor = if (reset) null else transferDao.cursor()
-        if (savedCursor?.endReached == true) return
-        val page = api.media(savedCursor?.nextCursor)
+        if (savedCursor?.endReached == true) return false
+        val page = api.media(savedCursor?.nextCursor, limit = SYNC_PAGE_SIZE)
         val now = System.currentTimeMillis()
-        val merged = page.items.map { remote ->
-            val local = mediaDao.byFingerprint(remote.fingerprint)
-            MediaEntity(
+        val merged = page.items.mapNotNull { remote ->
+            // Prefer the row that already owns this cloud record, so the unique mediaId index can't conflict.
+            val local = mediaDao.byMediaId(remote.mediaId) ?: mediaDao.byFingerprint(remote.fingerprint)
+            val next = MediaEntity(
                 localId = local?.localId ?: 0,
                 mediaId = remote.mediaId,
                 mediaFingerprint = remote.fingerprint,
@@ -132,12 +151,20 @@ class MediaRepository @Inject constructor(
                 createdAtEpochMs = local?.createdAtEpochMs ?: now,
                 updatedAtEpochMs = now,
             )
+            // Skip unchanged rows: rewriting thousands of identical rows invalidates the gallery on every launch.
+            next.takeUnless { local != null && local.copy(updatedAtEpochMs = 0) == next.copy(updatedAtEpochMs = 0) }
         }
-        mediaDao.upsertAll(merged)
+        if (merged.isNotEmpty()) mediaDao.upsertAll(merged)
         transferDao.upsertCursor(RemoteCursorEntity(nextCursor = page.nextCursor, endReached = page.nextCursor == null, updatedAtEpochMs = now))
+        return page.nextCursor != null && page.items.isNotEmpty()
     }
 
     private fun parseEpochMs(value: String): Long? = runCatching { Instant.parse(value).toEpochMilli() }.getOrNull()
+
+    private companion object {
+        const val SYNC_PAGE_SIZE = 200 // the server's maximum page size
+        const val MAX_SYNC_PAGES = 500
+    }
 }
 
 data class DeleteResult(val deleted: Int, val failures: List<String>)

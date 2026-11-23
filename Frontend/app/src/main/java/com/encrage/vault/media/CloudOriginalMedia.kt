@@ -5,6 +5,8 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -121,6 +123,7 @@ private class CloudChunkReader(
 private class CloudOriginalInputStream(
     private val reader: CloudChunkReader,
     private val plaintextSize: Long,
+    private val closeReader: Boolean = true,
 ) : InputStream() {
     private var position = 0L
 
@@ -143,7 +146,11 @@ private class CloudOriginalInputStream(
         return copied
     }
 
-    override fun close() = reader.close()
+    override fun available(): Int = (plaintextSize - position).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+
+    override fun close() {
+        if (closeReader) reader.close()
+    }
 }
 
 @Singleton
@@ -161,11 +168,35 @@ class CloudOriginalMedia @Inject constructor(
             inSampleSize = sampleSize(item.width, item.height, MAX_DECODED_EDGE)
         }
         CloudChunkReader(api, decryptor, masterKeys, mediaId).use { reader ->
-            BufferedInputStream(CloudOriginalInputStream(reader, item.sizeBytes), STREAM_BUFFER_BYTES).use { input ->
+            // EXIF lives in the header, so this reuses the already-decrypted first chunk (no extra download).
+            val orientation = runCatching {
+                ExifInterface(java.io.ByteArrayInputStream(reader.chunk(0)))
+                    .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+            val decoded = BufferedInputStream(CloudOriginalInputStream(reader, item.sizeBytes, closeReader = false), STREAM_BUFFER_BYTES).use { input ->
                 BitmapFactory.decodeStream(input, null, options)
                     ?: error("Cloud original is not a supported image")
             }
+            applyOrientation(decoded, orientation)
         }
+    }
+
+    /** Rotates/flips a decoded original to match its EXIF orientation, recycling the source when a copy is made. */
+    private fun applyOrientation(source: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+            else -> return source
+        }
+        val rotated = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+        if (rotated !== source) source.recycle()
+        return rotated
     }
 
     @OptIn(UnstableApi::class)
@@ -269,15 +300,17 @@ class CloudOriginalMedia @Inject constructor(
         return "ENCRAGE_${timestamp}_${item.mediaId?.take(8)}.$extension"
     }
 
+    /** Smallest power-of-two sample whose decoded longest edge fits within [targetEdge]. */
     private fun sampleSize(width: Int, height: Int, targetEdge: Int): Int {
         var sample = 1
         val longest = max(width, height)
-        while (longest / (sample * 2) >= targetEdge) sample *= 2
+        while (longest / sample > targetEdge) sample *= 2
         return sample
     }
 
     private companion object {
-        const val MAX_DECODED_EDGE = 4096
+        // Bounded so a swipeable viewer can hold neighbouring pages without memory spikes.
+        const val MAX_DECODED_EDGE = 2560
         const val STREAM_BUFFER_BYTES = 64 * 1024
     }
 }

@@ -7,7 +7,10 @@ import androidx.work.Configuration
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.video.VideoFrameDecoder
+import coil3.request.crossfade
 import com.encrage.vault.backup.BackupScheduler
+import com.encrage.vault.media.LocalThumbnailFetcher
+import com.encrage.vault.media.LocalThumbnailKeyer
 import com.encrage.vault.media.MediaStoreObserverRegistrar
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -22,7 +25,12 @@ class EncrageApplication : Application(), Configuration.Provider, SingletonImage
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
     override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
-        .components { add(VideoFrameDecoder.Factory()) }
+        .components {
+            add(LocalThumbnailFetcher.Factory(context.contentResolver))
+            add(LocalThumbnailKeyer())
+            add(VideoFrameDecoder.Factory())
+        }
+        .crossfade(120)
         .build()
 
     override fun onCreate() {

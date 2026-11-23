@@ -6,7 +6,12 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -33,11 +38,12 @@ class MainActivity : FragmentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels()
     @Inject lateinit var scheduler: BackupScheduler
 
+    /** Observable so the UI updates when access is granted here or in system settings. */
+    private var hasLibraryPermission by mutableStateOf(false)
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        hasLibraryPermission = scheduler.hasFullLibraryAccess()
         appViewModel.scanLibrary()
-        refreshUi()
     }
-    private var permissionVersion = 0
     private var pendingDelete: List<MediaEntity> = emptyList()
     private val deleteLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         val items = pendingDelete
@@ -50,28 +56,30 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        refreshUi()
-        appViewModel.scanLibrary()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        permissionVersion++
-    }
-
-    private fun refreshUi() {
+        hasLibraryPermission = scheduler.hasFullLibraryAccess()
         setContent {
             EncrageTheme {
                 AppRoot(
                     appViewModel, photosViewModel, backupViewModel, settingsViewModel,
-                    hasLibraryPermission = scheduler.hasFullLibraryAccess(),
+                    hasLibraryPermission = hasLibraryPermission,
                     onRequestLibraryPermission = ::requestLibraryPermission,
                     onAuthenticateRecoveryReveal = ::authenticateForRecoveryReveal,
                     onRecoveryVisibilityChanged = ::setSecureWindow,
                     onDeleteMedia = ::requestMediaDeletion,
                 )
             }
+        }
+        appViewModel.scanLibrary()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val granted = scheduler.hasFullLibraryAccess()
+        if (granted != hasLibraryPermission) {
+            hasLibraryPermission = granted
+            appViewModel.scanLibrary()
         }
     }
 
@@ -110,6 +118,11 @@ class MainActivity : FragmentActivity() {
             ContextCompat.getMainExecutor(this),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onSuccess()
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    val cancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON || errorCode == BiometricPrompt.ERROR_CANCELED
+                    if (!cancelled) Toast.makeText(this@MainActivity, errString, Toast.LENGTH_LONG).show()
+                }
             },
         )
         prompt.authenticate(

@@ -7,16 +7,18 @@ Native Android frontend foundation for a private, client-side encrypted photo/vi
 - Kotlin, Jetpack Compose Material 3, Navigation 3, Hilt, Coroutines/Flow.
 - Offline-first Room database with indexed local/cloud media state, resumable upload-session state, cursor state, and a Paging 3 gallery source.
 - Three-tab Photos / Backup / Settings shell.
-- Date-grouped, stable-key, paged 3-column local gallery. Local images use Coil 3; local videos use Media3/ExoPlayer. Photo zoom and a full-screen viewer are included.
+- Date-grouped, stable-key, paged gallery (2–6 columns, pinch or menu to resize; month grouping at 5+ columns). Sections come from a lightweight timeline query so headers never shift while pages load. Local tiles use the platform thumbnail cache through a custom Coil fetcher.
+- Swipeable full-screen viewer for local and cloud media: pinch/double-tap zoom with pan, swipe down to close, immersive mode, per-item Save/Delete, Compose Media3 video controls, EXIF-correct cloud originals.
 - MediaStore image/video reconciliation with modern/legacy permission handling. Selected-media access is treated as limited access, not an error.
 - A process-live ContentObserver plus unique immediate WorkManager scans and a six-hour periodic reconciliation worker.
-- Login, secure refresh-token persistence, automatic offline session restore, bearer injection, rotated refresh tokens, and synchronized single-flight 401 refresh.
+- Login, secure refresh-token persistence, instant offline session restore, bearer injection, rotated refresh tokens. Startup restore and 401 refresh share one lock (`TokenRefresher`) so a rotated token is never spent twice.
 - A 32-byte media master key generated from `SecureRandom`, or imported as a Recovery Key. It is wrapped by a non-exportable Android Keystore AES-256-GCM key before local storage.
 - Biometric/device-credential gated Recovery Key reveal; the reveal uses `FLAG_SECURE`.
 - Versioned 4 MiB chunk protocol using libsodium XChaCha20-Poly1305. AAD binds version, media ID, blob type, and chunk index. Originals, thumbnails, and private metadata use separate HKDF-SHA-256 subkeys.
 - Streaming privacy-preserving fingerprint primitive: `HMAC(account fingerprint key, SHA-256(plaintext))` with bounded buffers.
 - Resumable `BackupWorker` pipeline: fingerprint → `POST /media/uploads` → encrypt/upload 4 MiB chunks → encrypted 512 px JPEG thumbnail → complete. Room upload sessions track chunk indexes for resume.
-- Cursor-based cloud metadata merge into Room; UI never waits directly on an API request.
+- Cursor-based cloud metadata merge into Room across all pages; UI never waits directly on an API request. Pull to refresh rescans the phone and resyncs.
+- Server-unreachable detection (`ServerReachability`): uploads pause and back off instead of marking items failed; the Photos and Backup screens explain the outage.
 - Debug base URL configuration, release shrinking, backup exclusion rules, Room schema export, crypto tests, and Room transition/merge tests.
 
 ## Not implemented yet
@@ -24,12 +26,9 @@ Native Android frontend foundation for a private, client-side encrypted photo/vi
 The following later phases remain:
 
 - Private EXIF/GPS metadata extraction/encryption (uploads currently omit `private_metadata_ciphertext`).
-- Cloud thumbnail Coil fetch/decrypt component with plaintext disk cache disabled.
-- Multi-page cloud sync/RemoteMediator load triggers beyond the initial cursor page.
-- Cloud original image viewer, random-access encrypted Media3 chunk data source, and seeking.
-- Individual restore, pending MediaStore writes, Download All, and user-initiated data transfer integration.
+- Download All / new-phone migration (individual and multi-select restore to `DCIM/Encrage` exist).
 - Local validation of an imported Recovery Key against known account ciphertext. Until that endpoint payload/validation record is defined, import validates encoding and length only.
-- Cloud delete/info UI, richer quota/transfer error taxonomy, upload throttling, and notifications.
+- Upload throttling and transfer notifications.
 
 ## Backend assumptions
 
@@ -76,7 +75,7 @@ Instrumentation tests require an emulator/device:
 2. With automatic backup enabled, signed in, and a Recovery Key configured, `BackupWorker` drains the queue.
 3. Default WorkManager constraints require unmetered network unless “use mobile data” is enabled; charging-only is optional.
 4. Backup tab **Retry** forces an immediate scan + upload pass.
-5. Completed media appears under the backend `ENCRAGE_MEDIA_ROOT` as `{user_id}/{media_id}/`.
+5. Completed media appears under the backend `ENCRAGE_MEDIA_ROOT` as `{user_id}/media/{media_id}/`.
 
 ## Security notes
 

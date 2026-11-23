@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.hilt.work.HiltWorker
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -87,6 +88,7 @@ class BackupScheduler @Inject constructor(
         val request = OneTimeWorkRequestBuilder<BackupWorker>()
             .setConstraints(constraintsFor(prefs, requireNetwork = true, force = force))
             .setInputData(workDataOf(BackupWorker.KEY_FORCE to force))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(BACKUP_UPLOAD, policy, request)
     }
@@ -103,7 +105,9 @@ class BackupScheduler @Inject constructor(
         if (requireNetwork) {
             builder.setRequiredNetworkType(
                 when {
-                    force || preferences.useMobileData -> NetworkType.CONNECTED
+                    force -> NetworkType.CONNECTED
+                    preferences.useMobileData && preferences.useRoaming -> NetworkType.CONNECTED
+                    preferences.useMobileData -> NetworkType.NOT_ROAMING
                     else -> NetworkType.UNMETERED
                 },
             )
@@ -136,10 +140,13 @@ class BackupWorker @AssistedInject constructor(
         if (!prefs.automaticBackup && !force) return Result.success()
         if (!prefs.backgroundBackup && !force) return Result.success()
         if (!masterKeys.hasKey()) return Result.success()
+        // The wrapping key needs an unlocked device; wait and retry instead of failing every item.
+        if (!masterKeys.isUsable()) return Result.retry()
         if (tokens.accessToken() == null && tokens.refreshToken() == null) return Result.success()
         if (sessions.state.value is SessionState.SignedOut) return Result.success()
 
         var processed = 0
+        var backedUp = 0
         var retryableFailure = false
         val skippedIds = linkedSetOf<Long>()
         while (processed < MAX_ITEMS_PER_RUN) {
@@ -151,7 +158,10 @@ class BackupWorker @AssistedInject constructor(
             if (batch.isEmpty()) break
             for (item in batch) {
                 when (val outcome = uploader.upload(item, prefs)) {
-                    UploadOutcome.BackedUp -> processed += 1
+                    UploadOutcome.BackedUp -> {
+                        processed += 1
+                        backedUp += 1
+                    }
                     UploadOutcome.Skipped -> {
                         skippedIds += item.localId
                         processed += 1
@@ -161,6 +171,9 @@ class BackupWorker @AssistedInject constructor(
                         processed += 1
                         if (outcome.retryable) retryableFailure = true
                     }
+                    // Server unreachable: every remaining item would fail the same way. Keep them queued
+                    // and let WorkManager's exponential backoff (plus the network constraint) retry later.
+                    UploadOutcome.Offline -> return Result.retry()
                     is UploadOutcome.Fatal -> return if (runAttemptCount < 3) Result.retry() else Result.failure()
                 }
                 if (processed >= MAX_ITEMS_PER_RUN) break
@@ -173,7 +186,8 @@ class BackupWorker @AssistedInject constructor(
             scheduler.continueBackup(force = force, preferences = prefs)
         }
         return when {
-            retryableFailure && processed == 0 -> if (runAttemptCount < 5) Result.retry() else Result.failure()
+            retryableFailure && backedUp == 0 && !stillPending ->
+                if (runAttemptCount < 5) Result.retry() else Result.success()
             else -> Result.success()
         }
     }

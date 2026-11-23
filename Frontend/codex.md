@@ -62,18 +62,21 @@ com.encrage.vault/
 At startup, `SessionRepository` looks for a username in DataStore and a wrapped refresh token in `SecretStore`.
 
 - No saved credentials: show the login screen.
-- Valid refresh token: obtain a new access token and enter the app.
+- Saved credentials: enter the app immediately (offline), then refresh in the background.
+- Secrets are checked by presence, not by decryption. The Keystore wrapping keys require an unlocked device, so a locked phone must never look like "signed out" or "no Recovery Key". `MasterKeyManager.isUsable()` reports whether the key can be unwrapped right now; `BackupWorker` retries later when it can't.
 - No network or a transient server error: preserve the local session and remain usable offline.
 - HTTP 400, 401 or 403 from refresh: treat the refresh credential as invalid and clear the authentication session.
 - Signed in without a confirmed master key (or with a pending generated key): show `EncryptionSetupScreen` before the main shell.
 
 Passwords are sent only to `POST /auth/login` and the authenticated `POST /auth/change-password`; they are never persisted. Settings validates that a replacement password is at least 12 characters, differs from the current password and matches its confirmation before requesting the change. A successful change keeps the current session, while the backend revokes the user's other sessions. Access tokens remain in memory. Refresh tokens are encrypted with an AES-256-GCM key held by Android Keystore before being written under `noBackupFilesDir`.
 
-`BearerInterceptor` adds access tokens to normal requests. `RefreshAuthenticator` serializes refresh attempts so concurrent 401 responses cause one refresh rather than a refresh storm.
+`BearerInterceptor` adds access tokens to normal requests. Every refresh (startup restore and the 401 `RefreshAuthenticator`) goes through `TokenRefresher`, which holds one lock and skips the network call if another caller already rotated the token. The server revokes a session when a rotated refresh token is reused, so this must stay single-flight across both paths.
 
-Login and startup restore persist the rotated refresh token before exposing the new access token. The 401 `RefreshAuthenticator` path currently sets the in-memory access token first, then persists the rotated refresh token.
+`ServerReachability` (fed by `ReachabilityInterceptor` on the raw OkHttp client) records whether the server answered its last request. It is a UI hint only. The OkHttp client uses an 8 s connect timeout and 45 s read/write timeouts.
 
-Logout best-effort calls `POST /auth/logout`, then clears tokens and username. It does **not** clear the media master key; the Recovery Key remains on device across logout.
+`TokenRefresher` persists the rotated refresh token before exposing the new access token.
+
+Logout clears tokens and username immediately, then best-effort calls `POST /auth/logout` in the background. It does **not** clear the media master key; the Recovery Key remains on device across logout.
 
 ## Recovery Key and encryption
 
@@ -114,15 +117,17 @@ Discovery happens through two complementary paths:
 
 MediaStore notifications are treated as reconciliation hints, not as one-notification-per-file events. Full library access allows missing local items to be marked safely. Selected-media access is supported as a limited view and must not crash the app.
 
-The Photos tab uses Room `PagingSource` -> `Pager` -> Compose `LazyVerticalGrid` (page size 90, initial load 180, prefetch distance 120). Paging placeholders are enabled, so the fixed-size grid can lay out distant unloaded cells and fetch their records/thumbnails as they approach the viewport. Items are sorted newest first and grouped by local date. Local files are preferred over cloud copies. There is no `RemoteMediator`; paging is Room-only.
+The Photos tab uses Room `PagingSource` -> `Pager` -> Compose `LazyVerticalGrid` (page size 90, initial load 180, prefetch distance 120). Paging placeholders are enabled. Date sections are not derived from loaded pages: `MediaDao.observeTimeline` returns only the capture times in paging order, and `PhotosViewModel.timeline` turns them into `DaySection(day, firstMediaIndex, count)` (calendar months when the grid has 5+ columns). The grid lays out each header followed by `count` cells mapped to paging indices, so headers are right before rows load and the layout never jumps. Tile keys are the Room `localId` once loaded. Local files are preferred over cloud copies. There is no `RemoteMediator`; paging is Room-only.
 
-The filter icon opens a left-side navigation drawer (up to 360 dp wide) with Media Type and Backup Status dropdowns. The grid no longer dedicates two rows to filter chips.
+Local tiles go through `LocalThumbnail` -> `LocalThumbnailFetcher` (Coil) -> `ContentResolver.loadThumbnail` on Android 10+, which uses the platform thumbnail cache and is cancelled when a tile scrolls away. Older versions decode the URI with Coil.
 
-Cloud-only thumbnails are fetched through the authenticated API, decrypted with the thumbnail key domain and retained only in a bounded in-memory bitmap cache. Opening a cloud-only photo fetches and authenticates the original encrypted chunks and decodes the original stream without persisting plaintext. Opening a cloud-only video gives ExoPlayer a random-access data source that decrypts one 4 MiB original chunk at a time, so playback and seeking do not require a complete plaintext file. The photo viewer caps the decoded bitmap edge at 4096 px to keep display memory bounded while sourcing pixels from the original rather than the thumbnail.
+The top bar collapses on scroll and becomes a contextual selection bar (clear, select all loaded, save, delete) while selecting. Filter chips (All / Photos / Videos and a backup-status menu) sit at the top of the grid. Pull to refresh rescans MediaStore, syncs all cloud pages and nudges the backup queue. A right-edge fast scroller shows the month while dragging. Pinch or the grid menu sets 2-6 columns (persisted in DataStore). Tile badges: none when backed up, a cloud when cloud-only, an upload arrow while waiting, a spinner while uploading, an error icon on failure.
+
+Cloud-only thumbnails are fetched through the authenticated API, decrypted with the thumbnail key domain and retained only in a bounded in-memory bitmap cache. Opening a cloud-only photo fetches and authenticates the original encrypted chunks and decodes the original stream without persisting plaintext. Opening a cloud-only video gives ExoPlayer a random-access data source that decrypts one 4 MiB original chunk at a time, so playback and seeking do not require a complete plaintext file. The photo viewer caps the decoded bitmap edge at 2560 px (neighbouring pager pages can be in memory at once), applies the EXIF orientation read from the first decrypted chunk, and shows the cloud thumbnail until the original is ready. Originals are decrypted only for the settled page.
 
 Long-pressing a tile enters selection mode; subsequent taps add or remove tiles. Selected cloud-only items can be downloaded individually or as a group into `DCIM/Encrage` through MediaStore. Decrypted download bytes stream directly to the pending MediaStore output and the Room row becomes `LOCAL_AND_CLOUD` after publication. Selected items can also be deleted: Android's system confirmation removes local MediaStore items on Android 11+, then `DELETE /media/{media_id}` removes cloud copies. Partial remote failures retain an accurate remaining local/cloud Room state and surface an error.
 
-Local and cloud videos use the same deliberately reduced player controls: play/pause in the center and the normal progress/timing row. Previous/next, rewind, fast-forward and shuffle controls are hidden, and the player is inset above the system navigation bar.
+`MediaViewer` is a full-screen `HorizontalPager` over the same paging list: swipe between items, pinch or double-tap to zoom (pan while zoomed), swipe down to close, tap to toggle the chrome and immersive system bars. The top bar shows date, time, size and dimensions; the bottom bar shows backup state with Save (cloud-only) and Delete. Videos use Media3's Compose `ContentFrame` with custom play/pause and seek controls; only the settled page owns an `ExoPlayer`, neighbours show a poster.
 
 ## Automatic backup
 
@@ -133,9 +138,9 @@ WorkManager constraints reflect the user settings:
 - Wi-Fi/unmetered by default
 - any connected network when mobile data is enabled, or when Retry/force runs
 - optional charging requirement (ignored on force runs)
-- a “use data while roaming” preference exists in the Backup UI/DataStore but is **not** applied to WorkManager constraints today
+- `NOT_ROAMING` when mobile data is enabled but roaming is not
 
-`BackupWorker` processes bounded batches (3 items per batch, up to 15 items per run) and chains another unique work request when items remain. `MediaBackupUploader` handles one item at a time:
+`BackupWorker` processes bounded batches (3 items per batch, up to 15 items per run) and chains another unique work request when items remain. Connectivity failures (and a Keystore that locks mid-run) return `UploadOutcome.Offline`: the item goes back to `WAITING`, the run stops and returns `Result.retry()` with 30 s exponential backoff, so an offline server never turns the queue into failures. Worker cancellation also requeues rather than failing the item. When `already_exists` (or completion) names a `mediaId` that another Room row already owns, `MediaDao.attachCloudCopy` merges the cloud-only twin into the local row instead of violating the unique index; a second local copy of identical content stays backed up without owning the cloud record. `MediaBackupUploader` handles one item at a time:
 
 ```text
 fingerprint plaintext
@@ -157,13 +162,15 @@ The pipeline never creates a second full-size encrypted file and never loads an 
 
 ## UI destinations
 
-- **Photos** — local-first, paged, date-grouped gallery with a filter drawer, cloud-original viewing, long-press multi-selection, download and deletion.
-- **Backup** — queue status, failures, retry action and backup/network constraints.
-- **Settings** — account and password change, cloud storage usage, Download All placeholder, Recovery Key reveal, editable API endpoint, About and logout.
+- **Photos** — local-first, paged, date-grouped gallery with filter chips, a swipeable viewer, long-press and per-day multi-selection, download and deletion.
+- **Backup** — a status card (up to date / uploading / waiting for Wi-Fi or charging / server unreachable / failed with summarised reasons) with the matching action, counts, and described settings. The tab shows a badge when backup needs attention.
+- **Settings** — account card and password change, storage with retry, Recovery Key reveal, server address, version, and logout with confirmation.
+
+Back from Backup or Settings returns to Photos; back during selection clears it. Sign-in and action errors are mapped to plain language by `UserMessages`.
 
 The Material theme uses accessible warm-neutral palettes for both light and system dark modes. Interactive primary colors contrast strongly with their content colors, surface levels are visibly separated, and the bottom navigation uses a neutral container with a high-contrast selected indicator. Gallery status badges use a dark scrim so white icons remain visible over both light and dark media.
 
-The main UI starts a non-blocking cloud metadata sync and backup pass. Cloud metadata is merged into Room by the private fingerprint. Sync always requests the first cursor page (`reset = true`); further pages are not loaded automatically.
+The main UI starts a non-blocking cloud metadata sync and backup pass. `syncAllCloudPages` walks every cursor page (200 per page, at most 500 pages) from the newest item. Each remote item merges into the Room row that already owns its `mediaId`, otherwise the row with the same private fingerprint.
 
 ## Backend contract
 
@@ -199,11 +206,11 @@ The API base URL must end with `/`. Debug defaults to `http://10.0.2.2:8000/` (t
 ## Current limitations
 
 - Private EXIF/GPS metadata extraction and encrypted upload are not implemented (`private_metadata_ciphertext` is always omitted).
-- Only the initial cloud cursor page is synchronized automatically (and always with `reset = true` from the main shell).
-- Download All and migration transfers are not implemented. Individual/multi-select cloud-only restore is implemented.
+- Download All and migration transfers are not implemented (there is no Settings entry). Individual/multi-select cloud-only restore is implemented.
+- Items deleted on the server by another device are not removed from Room by sync.
 - Imported Recovery Keys are checked for encoding/length but are not yet validated against known account ciphertext.
-- Cloud deletion/info UI, richer transfer errors and user-visible long-transfer notifications remain.
-- Backup “roaming” preference is stored in the UI but not enforced in WorkManager network constraints.
+- User-visible long-transfer notifications remain.
+- The wrapping keys require an unlocked device, so backup only progresses while the phone is unlocked (locked runs retry later).
 
 Do not work around these gaps by weakening encryption, writing decrypted cloud files to uncontrolled caches, loading whole videos into memory, or bypassing Room as the gallery source of truth.
 

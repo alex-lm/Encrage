@@ -56,7 +56,7 @@ class MediaStoreScanner @Inject constructor(
                         observed += uri
                         val existing = mediaDao.byMediaStoreUri(uri)
                         val now = System.currentTimeMillis()
-                        discovered += MediaEntity(
+                        val next = MediaEntity(
                             localId = existing?.localId ?: 0,
                             mediaId = existing?.mediaId,
                             mediaFingerprint = existing?.mediaFingerprint,
@@ -71,7 +71,11 @@ class MediaStoreScanner @Inject constructor(
                             height = cursor.getInt(heightIndex),
                             durationSeconds = if (type == MediaType.VIDEO && durationIndex >= 0) cursor.getLong(durationIndex) / 1000 else null,
                             sizeBytes = cursor.getLong(sizeIndex),
-                            localState = if (existing?.mediaId != null) LocalState.LOCAL_AND_CLOUD else LocalState.LOCAL_ONLY,
+                            localState = if (existing?.mediaId != null || existing?.cloudState == CloudState.PRESENT) {
+                                LocalState.LOCAL_AND_CLOUD
+                            } else {
+                                LocalState.LOCAL_ONLY
+                            },
                             cloudState = existing?.cloudState ?: CloudState.NONE,
                             backupStatus = existing?.backupStatus ?: BackupStatus.WAITING,
                             thumbnailState = ThumbnailState.LOCAL,
@@ -79,6 +83,10 @@ class MediaStoreScanner @Inject constructor(
                             createdAtEpochMs = existing?.createdAtEpochMs ?: now,
                             updatedAtEpochMs = now,
                         )
+                        // Only write rows that changed, so a rescan doesn't invalidate the whole gallery.
+                        if (existing == null || existing.copy(updatedAtEpochMs = 0) != next.copy(updatedAtEpochMs = 0)) {
+                            discovered += next
+                        }
                     }
                 }
             } catch (_: SecurityException) {

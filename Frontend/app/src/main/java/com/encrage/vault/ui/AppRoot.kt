@@ -1,7 +1,6 @@
 package com.encrage.vault.ui
 
-import android.Manifest
-import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -9,6 +8,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -22,7 +23,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +69,7 @@ fun AppRoot(
             state = authUi,
             apiEndpoint = apiEndpoint,
             onLogin = appViewModel::login,
+            onEdit = appViewModel::clearAuthError,
             onSaveApiEndpoint = settingsViewModel::saveApiEndpoint,
         )
         is SessionState.SignedIn -> if (!hasKey || generated != null) {
@@ -109,26 +110,42 @@ private fun MainShell(
 ) {
     val backStack = rememberNavBackStack(PhotosRoute)
     val current = backStack.lastOrNull()
-    val counts by backupViewModel.counts.collectAsStateWithLifecycle()
-    val backupSettings by backupViewModel.settings.collectAsStateWithLifecycle()
+    val backupUi by backupViewModel.ui.collectAsStateWithLifecycle()
     val photoFilters by photosViewModel.filters.collectAsStateWithLifecycle()
+    val timeline by photosViewModel.timeline.collectAsStateWithLifecycle()
+    val columns by photosViewModel.columns.collectAsStateWithLifecycle()
+    val refreshing by photosViewModel.refreshing.collectAsStateWithLifecycle()
+    val unreachableSince by photosViewModel.serverUnreachableSince.collectAsStateWithLifecycle()
     val mediaActionUi by photosViewModel.actionUi.collectAsStateWithLifecycle()
     val storage by settingsViewModel.storage.collectAsStateWithLifecycle()
     val recoveryKey by settingsViewModel.recoveryKey.collectAsStateWithLifecycle()
     val passwordChange by settingsViewModel.passwordChange.collectAsStateWithLifecycle()
     val photos = photosViewModel.gallery.collectAsLazyPagingItems()
     LaunchedEffect(Unit) {
-        settingsViewModel.loadStorage()
         photosViewModel.syncCloudMetadata()
         backupViewModel.startBackup()
     }
+    LaunchedEffect(current) { if (current == SettingsRoute) settingsViewModel.loadStorage() }
     LaunchedEffect(recoveryKey) { onRecoveryVisibilityChanged(recoveryKey != null) }
     DisposableEffect(photosViewModel) {
         onDispose { photosViewModel.clearCloudThumbnailCache() }
     }
+    fun navigate(route: NavKey) {
+        if (current != route) {
+            backStack.clear()
+            backStack.add(route)
+        }
+    }
+    // Back from Backup or Settings returns to Photos instead of leaving the app.
+    BackHandler(enabled = current != PhotosRoute) { navigate(PhotosRoute) }
+    val backupNeedsAttention = backupUi.counts.failed > 0 || backupUi.serverUnreachableSince != null
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(when (current) { BackupRoute -> "Backup"; SettingsRoute -> "Settings"; else -> "Photos" }) }) },
+        topBar = {
+            if (current != PhotosRoute) {
+                TopAppBar(title = { Text(if (current == BackupRoute) "Backup" else "Settings") })
+            }
+        },
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -141,8 +158,15 @@ private fun MainShell(
                 ).forEach { (route, label, icon) ->
                     NavigationBarItem(
                         selected = current == route,
-                        onClick = { if (current != route) { backStack.clear(); backStack.add(route) } },
-                        icon = { Icon(icon, null) }, label = { Text(label) },
+                        onClick = { navigate(route) },
+                        icon = {
+                            if (route == BackupRoute && backupNeedsAttention) {
+                                BadgedBox(badge = { Badge() }) { Icon(icon, "$label, needs attention") }
+                            } else {
+                                Icon(icon, null)
+                            }
+                        },
+                        label = { Text(label) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                             selectedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -162,12 +186,19 @@ private fun MainShell(
                 entry<PhotosRoute> {
                     PhotosScreen(
                         media = photos,
+                        timeline = timeline,
                         filters = photoFilters,
                         actionUi = mediaActionUi,
+                        columns = columns,
+                        refreshing = refreshing,
+                        serverUnreachable = unreachableSince != null,
                         hasPermission = hasLibraryPermission,
                         onRequestPermission = onRequestLibraryPermission,
                         onSelectMediaFilter = photosViewModel::selectMediaFilter,
                         onSelectLocationFilter = photosViewModel::selectLocationFilter,
+                        onColumnsChange = { photosViewModel.setColumns(it) },
+                        onRefresh = photosViewModel::refresh,
+                        onOpenBackup = { navigate(BackupRoute) },
                         onLoadCloudThumbnail = photosViewModel::cloudThumbnail,
                         onLoadCloudPhoto = photosViewModel::cloudPhoto,
                         onCloudVideoDataSource = photosViewModel::cloudVideoDataSource,
@@ -176,16 +207,26 @@ private fun MainShell(
                         onActionMessageShown = photosViewModel::clearActionMessage,
                     )
                 }
-                entry<BackupRoute> { BackupScreen(counts, backupSettings, backupViewModel::update, backupViewModel::retry) }
+                entry<BackupRoute> {
+                    BackupScreen(
+                        ui = backupUi,
+                        apiEndpoint = apiEndpoint,
+                        hasLibraryPermission = hasLibraryPermission,
+                        onRequestPermission = onRequestLibraryPermission,
+                        onUpdate = { backupViewModel.update(it) },
+                        onBackupNow = backupViewModel::retry,
+                    )
+                }
                 entry<SettingsRoute> {
                     SettingsScreen(
                         username, storage, recoveryKey, passwordChange, apiEndpoint,
+                        onRetryStorage = { settingsViewModel.loadStorage() },
                         onAuthenticateReveal = { onAuthenticateRecoveryReveal(settingsViewModel::revealAfterAuthentication) },
                         onHideRecoveryKey = settingsViewModel::hideRecoveryKey,
                         onChangePassword = settingsViewModel::changePassword,
                         onClearPasswordChangeState = settingsViewModel::clearPasswordChangeState,
-                        onSaveApiEndpoint = settingsViewModel::saveApiEndpoint,
-                        onLogout = settingsViewModel::logout,
+                        onSaveApiEndpoint = { settingsViewModel.saveApiEndpoint(it) },
+                        onLogout = { settingsViewModel.logout() },
                     )
                 }
             },

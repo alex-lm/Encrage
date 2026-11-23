@@ -27,8 +27,44 @@ interface MediaDao {
     )
     fun pagingSource(mediaType: MediaType?, localState: LocalState?): PagingSource<Int, MediaEntity>
 
+    /**
+     * Capture times in exactly the paging order. The gallery derives its date sections from this small
+     * list, so headers and grid positions are known before any page of full rows has loaded.
+     */
+    @Query(
+        """SELECT dateTimeTakenEpochMs FROM media
+        WHERE localState != 'MISSING'
+          AND (:mediaType IS NULL OR mediaType = :mediaType)
+          AND (:localState IS NULL OR localState = :localState)
+        ORDER BY dateTimeTakenEpochMs DESC, localId DESC""",
+    )
+    fun observeTimeline(mediaType: MediaType?, localState: LocalState?): Flow<List<Long>>
+
     @Query("SELECT * FROM media WHERE localId = :id")
     suspend fun byId(id: Long): MediaEntity?
+
+    @Query("SELECT * FROM media WHERE mediaId = :mediaId LIMIT 1")
+    suspend fun byMediaId(mediaId: String): MediaEntity?
+
+    /**
+     * Records that [item] (which carries its cloud `mediaId`) is backed up. If another row already owns
+     * that mediaId — typically a cloud-only row synced before the local copy was fingerprinted — the two
+     * are merged instead of failing on the unique index. A second local copy of identical content keeps
+     * its own row but does not take ownership of the cloud record.
+     */
+    @Transaction
+    suspend fun attachCloudCopy(item: MediaEntity) {
+        val mediaId = item.mediaId
+        val holder = mediaId?.let { byMediaId(it) }
+        when {
+            holder == null || holder.localId == item.localId -> upsert(item)
+            holder.mediaStoreUri == null -> {
+                deleteById(holder.localId)
+                upsert(item)
+            }
+            else -> upsert(item.copy(mediaId = null))
+        }
+    }
 
     @Query("SELECT * FROM media WHERE mediaStoreUri = :uri LIMIT 1")
     suspend fun byMediaStoreUri(uri: String): MediaEntity?
@@ -56,7 +92,8 @@ interface MediaDao {
         COALESCE(SUM(CASE WHEN backupStatus = 'BACKED_UP' THEN 1 ELSE 0 END), 0) AS backedUp,
         COALESCE(SUM(CASE WHEN localState IN ('LOCAL_ONLY','LOCAL_AND_CLOUD') AND backupStatus != 'BACKED_UP' THEN sizeBytes ELSE 0 END), 0) AS bytesRemaining,
         COALESCE(SUM(CASE WHEN localState IN ('LOCAL_ONLY','LOCAL_AND_CLOUD') THEN sizeBytes ELSE 0 END), 0) AS totalLocalBytes
-        FROM media""",
+        FROM media
+        WHERE localState != 'MISSING'""",
     )
     fun observeBackupCounts(): Flow<BackupCounts>
 
@@ -77,6 +114,14 @@ interface MediaDao {
         LIMIT :limit""",
     )
     suspend fun pendingBackups(limit: Int): List<MediaEntity>
+
+    /** Most recent distinct failure reasons, for the Backup screen. */
+    @Query(
+        """SELECT lastError FROM media
+        WHERE backupStatus = 'FAILED' AND localState != 'MISSING' AND lastError IS NOT NULL
+        GROUP BY lastError ORDER BY MAX(updatedAtEpochMs) DESC LIMIT 3""",
+    )
+    fun observeRecentFailureReasons(): Flow<List<String>>
 
     @Query(
         """UPDATE media SET

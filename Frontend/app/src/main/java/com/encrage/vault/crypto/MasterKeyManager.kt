@@ -7,7 +7,14 @@ import javax.inject.Singleton
 
 @Singleton
 class MasterKeyManager @Inject constructor(private val secretStore: SecretStore) {
-    fun hasKey(): Boolean = runCatching {
+    /**
+     * Whether a master key is stored. Checks presence, not decryptability: the wrapping key requires an
+     * unlocked device, and treating "phone is locked" as "no key" would send the user to key setup.
+     */
+    fun hasKey(): Boolean = secretStore.contains(KEY_NAME)
+
+    /** True when the stored key can be unwrapped right now (false while the device is locked). */
+    fun isUsable(): Boolean = runCatching {
         val key = secretStore.get(KEY_NAME) ?: return@runCatching false
         (key.size == KEY_BYTES).also { key.fill(0) }
     }.getOrDefault(false)

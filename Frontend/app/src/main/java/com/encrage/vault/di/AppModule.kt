@@ -13,7 +13,9 @@ import com.encrage.vault.data.remote.AuthApi
 import com.encrage.vault.data.remote.ApiEndpointInterceptor
 import com.encrage.vault.data.remote.BearerInterceptor
 import com.encrage.vault.data.remote.EncrageApi
+import com.encrage.vault.data.remote.ReachabilityInterceptor
 import com.encrage.vault.data.remote.RefreshAuthenticator
+import java.util.concurrent.TimeUnit
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -44,8 +46,17 @@ object AppModule {
     @Provides fun transferDao(db: EncrageDatabase): TransferDao = db.transferDao()
 
     @Provides @Singleton @RawHttp
-    fun rawHttp(endpointInterceptor: ApiEndpointInterceptor): OkHttpClient = OkHttpClient.Builder()
+    fun rawHttp(
+        endpointInterceptor: ApiEndpointInterceptor,
+        reachabilityInterceptor: ReachabilityInterceptor,
+    ): OkHttpClient = OkHttpClient.Builder()
+        // A self-hosted server that is offline should fail fast; large chunk transfers keep longer I/O limits.
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .addInterceptor(endpointInterceptor)
+        .addInterceptor(reachabilityInterceptor)
         .addInterceptor(HttpLoggingInterceptor().apply {
             redactHeader("Authorization")
             level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE

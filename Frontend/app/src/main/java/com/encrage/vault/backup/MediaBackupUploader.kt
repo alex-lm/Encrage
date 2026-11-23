@@ -19,7 +19,10 @@ import com.encrage.vault.data.local.UploadSessionEntity
 import com.encrage.vault.data.preferences.BackupPreferences
 import com.encrage.vault.data.remote.EncrageApi
 import com.encrage.vault.data.remote.UploadCreateRequest
+import com.encrage.vault.data.remote.isConnectivityFailure
 import com.encrage.vault.media.ThumbnailGenerator
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
@@ -32,6 +35,8 @@ sealed interface UploadOutcome {
     data object Skipped : UploadOutcome
     data class Failed(val message: String, val retryable: Boolean) : UploadOutcome
     data class Fatal(val message: String) : UploadOutcome
+    /** The server is unreachable or the keys are locked. The item stays queued; the whole run should back off. */
+    data object Offline : UploadOutcome
 }
 
 @Singleton
@@ -131,6 +136,16 @@ class MediaBackupUploader @Inject constructor(
                 }
             }
         } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) {
+                // WorkManager stopped us (constraints changed). Leave the item queued, not failed.
+                requeue(item.localId)
+                throw error
+            }
+            // Server unreachable, or the phone locked mid-run (Keystore unavailable): not the item's fault.
+            if (isConnectivityFailure(error) || !masterKeys.isUsable()) {
+                requeue(item.localId)
+                return UploadOutcome.Offline
+            }
             val message = error.message ?: error.javaClass.simpleName
             fail(item.localId, message)
             UploadOutcome.Failed(message, retryable = true)
@@ -226,7 +241,7 @@ class MediaBackupUploader @Inject constructor(
     }
 
     private suspend fun markBackedUp(item: MediaEntity, mediaId: String, fingerprint: String) {
-        mediaDao.upsert(
+        mediaDao.attachCloudCopy(
             item.copy(
                 mediaId = mediaId,
                 mediaFingerprint = fingerprint,
@@ -242,6 +257,10 @@ class MediaBackupUploader @Inject constructor(
 
     private suspend fun fail(localId: Long, message: String) {
         mediaDao.updateBackupStatus(localId, BackupStatus.FAILED, message.take(500), System.currentTimeMillis())
+    }
+
+    private suspend fun requeue(localId: Long) = withContext(NonCancellable) {
+        mediaDao.updateBackupStatus(localId, BackupStatus.WAITING, null, System.currentTimeMillis())
     }
 
     private suspend fun persistSession(

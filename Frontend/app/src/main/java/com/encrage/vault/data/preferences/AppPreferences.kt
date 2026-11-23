@@ -4,6 +4,7 @@ import android.content.Context
 import com.encrage.vault.BuildConfig
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -46,6 +47,14 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
 
     suspend fun setApiBaseUrl(value: String) = context.dataStore.edit { it[API_BASE_URL] = value }
 
+    val galleryColumns: Flow<Int> = context.dataStore.data.map {
+        (it[GALLERY_COLUMNS] ?: DEFAULT_COLUMNS).coerceIn(MIN_COLUMNS, MAX_COLUMNS)
+    }
+
+    suspend fun setGalleryColumns(value: Int) = context.dataStore.edit {
+        it[GALLERY_COLUMNS] = value.coerceIn(MIN_COLUMNS, MAX_COLUMNS)
+    }
+
     suspend fun updateBackup(transform: (BackupPreferences) -> BackupPreferences) {
         context.dataStore.edit { p ->
             val next = transform(
@@ -65,15 +74,19 @@ class AppPreferences @Inject constructor(@ApplicationContext private val context
         }
     }
 
-    private companion object {
-        val USERNAME = stringPreferencesKey("username")
-        val API_BASE_URL = stringPreferencesKey("api_base_url")
-        val AUTO_BACKUP = booleanPreferencesKey("automatic_backup")
-        val PHOTOS = booleanPreferencesKey("backup_photos")
-        val VIDEOS = booleanPreferencesKey("backup_videos")
-        val MOBILE = booleanPreferencesKey("use_mobile_data")
-        val ROAMING = booleanPreferencesKey("use_roaming")
-        val CHARGING = booleanPreferencesKey("only_while_charging")
-        val BACKGROUND = booleanPreferencesKey("background_backup")
+    companion object {
+        const val DEFAULT_COLUMNS = 4
+        const val MIN_COLUMNS = 2
+        const val MAX_COLUMNS = 6
+        private val GALLERY_COLUMNS = intPreferencesKey("gallery_columns")
+        private val USERNAME = stringPreferencesKey("username")
+        private val API_BASE_URL = stringPreferencesKey("api_base_url")
+        private val AUTO_BACKUP = booleanPreferencesKey("automatic_backup")
+        private val PHOTOS = booleanPreferencesKey("backup_photos")
+        private val VIDEOS = booleanPreferencesKey("backup_videos")
+        private val MOBILE = booleanPreferencesKey("use_mobile_data")
+        private val ROAMING = booleanPreferencesKey("use_roaming")
+        private val CHARGING = booleanPreferencesKey("only_while_charging")
+        private val BACKGROUND = booleanPreferencesKey("background_backup")
     }
 }

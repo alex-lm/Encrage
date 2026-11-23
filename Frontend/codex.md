@@ -201,7 +201,7 @@ POST   /media/fingerprints/check
 DELETE /media/uploads/{upload_id}
 ```
 
-The API base URL must end with `/`. Debug defaults to `http://10.0.2.2:8000/` (the emulator's alias for the host machine) and can be overridden with `ENCRAGE_DEBUG_API_URL` in the user's Gradle properties. The release URL is deliberately `https://api.example.invalid/` until a production endpoint is configured. Users can override the endpoint from Settings or the sign-in screen; the normalized value is stored in DataStore and applied to all requests immediately. Changing it clears local session credentials so tokens are never carried to a different server. Plain HTTP endpoints are accepted only in debug builds. Release builds enable minify and resource shrinking.
+The API base URL must end with `/`. Debug defaults to `http://10.0.2.2:8000/` (the emulator's alias for the host machine) and can be overridden with `ENCRAGE_DEBUG_API_URL` in the user's Gradle properties. The release URL is deliberately `https://api.example.invalid/` until a production endpoint is configured. Users can override the endpoint from Settings or the sign-in screen; the normalized value is stored in DataStore and applied to all requests immediately. Changing it clears local session credentials so tokens are never carried to a different server. Plain HTTP endpoints are accepted only in debug builds. An address typed without a scheme gets `http://` in debug builds and `https://` in release builds. Release builds enable minify and resource shrinking.
 
 ## Current limitations
 

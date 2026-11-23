@@ -16,7 +16,8 @@ object ApiEndpoint {
     fun normalize(value: String, allowCleartext: Boolean = BuildConfig.DEBUG): Result<String> = runCatching {
         val input = value.trim()
         require(input.isNotEmpty()) { "Enter an API address" }
-        val candidate = if ("://" in input) input else "http://$input"
+        // No scheme typed: assume HTTP only where it is allowed (debug, LAN testing), otherwise HTTPS.
+        val candidate = if ("://" in input) input else "${if (allowCleartext) "http" else "https"}://$input"
         val url = candidate.toHttpUrlOrNull() ?: throw IllegalArgumentException("Enter a valid IP address or URL")
         require(url.scheme == "https" || allowCleartext) { "HTTP endpoints are only allowed in debug builds" }
         require(url.username.isEmpty() && url.password.isEmpty()) { "The API URL cannot contain credentials" }

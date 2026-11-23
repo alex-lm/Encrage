@@ -15,6 +15,18 @@ class ApiEndpointTest {
     }
 
     @Test
+    fun bareHostDefaultsToHttpsOutsideDebugBuilds() {
+        assertEquals(
+            "https://photos.example.com/",
+            ApiEndpoint.normalize("photos.example.com", allowCleartext = false).getOrThrow(),
+        )
+        assertEquals(
+            "https://192.0.2.20:8443/",
+            ApiEndpoint.normalize("192.0.2.20:8443", allowCleartext = false).getOrThrow(),
+        )
+    }
+
+    @Test
     fun fullUrlKeepsBasePathAndAddsTrailingSlash() {
         assertEquals(
             "https://photos.example.com/api/v1/",

@@ -7,11 +7,20 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 
+private const val KIB = 1024L
+private const val MIB = KIB * 1024
+private const val GIB = MIB * 1024
+private const val TIB = GIB * 1024
+
+/**
+ * Binary units (1 GB = 1024³ bytes), matching the admin console, so a quota
+ * set there as "100 GiB" reads as "100.0 GB" here rather than "107.4 GB".
+ */
 internal fun formatBytes(bytes: Long): String = when {
-    bytes >= 1_000_000_000_000 -> "%.2f TB".format(bytes / 1_000_000_000_000.0)
-    bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
-    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
-    bytes >= 1_000 -> "%.0f KB".format(bytes / 1_000.0)
+    bytes >= TIB -> "%.2f TB".format(bytes / TIB.toDouble())
+    bytes >= GIB -> "%.1f GB".format(bytes / GIB.toDouble())
+    bytes >= MIB -> "%.1f MB".format(bytes / MIB.toDouble())
+    bytes >= KIB -> "%.0f KB".format(bytes / KIB.toDouble())
     else -> "$bytes B"
 }
 

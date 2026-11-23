@@ -44,7 +44,7 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"   # JDK 17
 
 - Build stack: Gradle 8.13, AGP 8.13.2, Kotlin 2.3.21, KSP, compile/target SDK 36, minSdk 26.
 - The debug API URL defaults to `http://10.0.2.2:8000/` (the emulator's alias for the host). Override it with `ENCRAGE_DEBUG_API_URL` in `~/.gradle/gradle.properties`. The release URL is the placeholder `https://api.example.invalid/`.
-- Unit tests live in `app/src/test` (`MediaKeyDerivationTest`, `ApiEndpointTest`, `ColorContrastTest`). Instrumented tests live in `app/src/androidTest` (`ChunkCipherInstrumentedTest`, `MediaDaoInstrumentedTest`). `ChunkCipher` needs libsodium, so its tests are instrumented only.
+- Unit tests live in `app/src/test` (`MediaKeyDerivationTest`, `ApiEndpointTest`, `ColorContrastTest`, `FormatTest`). Instrumented tests live in `app/src/androidTest` (`ChunkCipherInstrumentedTest`, `MediaDaoInstrumentedTest`). `ChunkCipher` needs libsodium, so its tests are instrumented only.
 
 ## Backend architecture
 

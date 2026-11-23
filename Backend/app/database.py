@@ -9,7 +9,7 @@ from typing import Iterator
 from .storage import StorageError, safe_path
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 CURRENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -141,6 +141,41 @@ CREATE TABLE IF NOT EXISTS legacy_media_migrations (
     status TEXT NOT NULL CHECK (status IN ('migrated', 'deleted')),
     migrated_at TEXT NOT NULL
 );
+
+-- Schema v4: operational activity for the admin console. Holds no media metadata
+-- beyond opaque sizes. user_id has no foreign key so history survives user deletion.
+CREATE TABLE IF NOT EXISTS activity_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    user_id TEXT,
+    username TEXT,
+    actor TEXT NOT NULL,
+    bytes INTEGER,
+    client_ip TEXT,
+    details TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_activity_events_time ON activity_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_activity_events_type_time ON activity_events(event_type, occurred_at);
+
+CREATE TABLE IF NOT EXISTS console_admins (
+    admin_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS console_sessions (
+    session_hash TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL REFERENCES console_admins(admin_id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    client_ip TEXT,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_console_sessions_admin ON console_sessions(admin_id);
 """
 
 

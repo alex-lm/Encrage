@@ -19,6 +19,69 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 OpenAPI documentation is served at `/docs`. Production traffic is rejected unless FastAPI sees an HTTPS request. Terminate TLS at a trusted reverse proxy, configure Uvicorn's trusted forwarded IPs narrowly, and persist the SQLite database and media root together in backups.
 
+## Docker
+
+`docker-compose.yml` runs two containers from one image. Both use restart policy `unless-stopped` and mount the same data directory:
+
+| Container | Runs | Container port |
+|---|---|---|
+| `encrage-backend` | the user API (`app.main:app`) | 8000 |
+| `encrage-console` | the admin web console (`app.console:app`) | 8001 |
+
+Both read `./.env`, mount `ENCRAGE_DATA_DIR` at `/data`, and force the in-container paths to `/data/encrage.sqlite3` and `/data/media`. Deployment keys in `.env` (see `.env.example`):
+
+| Key | Meaning | Default |
+|---|---|---|
+| `ENCRAGE_DATA_DIR` | Host directory holding the database and `media/` | `./data` |
+| `ENCRAGE_API_PORT` | Host port for the API | 8000 |
+| `ENCRAGE_CONSOLE_PORT` | Host port for the console | 8001 |
+| `ENCRAGE_API_BIND`, `ENCRAGE_CONSOLE_BIND` | Host address each port listens on (for example a LAN IP) | `0.0.0.0` |
+| `ENCRAGE_UID`, `ENCRAGE_GID` | Host user that owns the data directory | 10001 |
+
+The image defaults to `ENCRAGE_ENV=production`, which makes the API and the console reject plain HTTP. Set `ENCRAGE_ENV=development` in `.env` only when no TLS proxy sits in front of them on a trusted LAN.
+
+For a NAS reachable over SSH, `deploy/encrage-nas.ps1` controls the deployment from Windows. Copy `deploy/nas.example.env` to `deploy/nas.local.env`, which is gitignored, and fill in the host, SSH user, key and folder. The script keeps the compose project in that folder (default `~/encrage`). Then run:
+
+```powershell
+.\deploy\encrage-nas.ps1 status                    # container state, health and URLs
+.\deploy\encrage-nas.ps1 stop                      # deactivate both (stays stopped across reboots)
+.\deploy\encrage-nas.ps1 start                     # activate both
+.\deploy\encrage-nas.ps1 stop -Service console     # just the console (-Service api|console)
+.\deploy\encrage-nas.ps1 logs -Service api         # follow logs
+.\deploy\encrage-nas.ps1 console-admin -Name <n>   # create a console admin or reset its password
+.\deploy\encrage-nas.ps1 deploy                    # upload current code, rebuild, restart (never touches .env or data/)
+```
+
+Parameters (`-HostName`, `-User`, `-KeyPath`, `-RemoteDir`) override the `ENCRAGE_NAS_HOST`, `ENCRAGE_NAS_USER`, `ENCRAGE_NAS_KEY` and `ENCRAGE_NAS_DIR` environment variables, which override `nas.local.env`. The NAS's SFTP may be chrooted, so the script uploads with `scp -O`. After changing ports or `ENCRAGE_DATA_DIR` in the NAS's `.env`, run `start` to recreate the containers.
+
+Management commands run inside a container. Run these from `~/encrage` on the NAS:
+
+```bash
+docker compose exec encrage-backend python manage.py create-user <name> --quota-bytes <n>
+docker compose exec encrage-backend python manage.py reset-password <name>
+docker compose exec encrage-console python manage.py set-console-admin <name>
+docker compose exec encrage-console python manage.py remove-console-admin <name>
+```
+
+`reset-password` prompts twice for a new password (at least 12 characters), replaces the hash, and revokes all of that user's sessions and refresh tokens, so every device must sign in again. The media master key does not depend on the password, so a reset never affects decryption. Users who know their current password can instead change it in the app (`POST /auth/change-password`), which keeps the calling session signed in.
+
+## Admin console
+
+The console is a separate FastAPI app (`app/console.py`, static page in `app/console_static/`) on its own port. It is never mounted on the user API. It offers:
+
+- **Overview:** health of the API (probed over the compose network), disk, encrypted storage, the database (size, schema version, on-demand `PRAGMA quick_check`), upload and deletion queues, and warnings.
+- **Recent usage:** per-day charts and totals over 7, 30 or 90 days, top uploaders, and the latest activity.
+- **Users:** add users, change quotas (never below current usage), reset passwords, sign out all devices, disable or enable accounts, and delete accounts. Deleting requires typing the username, then removes the account's rows and all its files through `file_delete_queue`.
+- **Activity:** a filterable log of sign-ins, failed sign-ins, uploads, deletions and every admin action.
+
+Console admins are separate from app users and exist only in `console_admins`. Create them from the CLI with `set-console-admin`; the web page cannot create them. Sign-in sets an opaque session cookie, stored only as SHA-256 in `console_sessions`. The cookie is HttpOnly and SameSite=Strict, Secure over HTTPS, and expires after `ENCRAGE_CONSOLE_SESSION_HOURS` (12). After 5 failed attempts from one address in 15 minutes, sign-in is locked for that address, and after 30 failures in total it is locked for everyone. State-changing requests must send `X-Encrage-Console: 1` and pass a same-origin `Origin` check. Pages are served with a strict Content-Security-Policy and load no third-party code.
+
+Usage history works as follows:
+
+- **Uploads and sign-ins per day** come from `media.created_at` and `sessions.created_at`, so they cover data from before the console existed.
+- **Deletions, failed sign-ins and admin actions** come from `activity_events` (schema v4), which starts empty. Events older than `ENCRAGE_ACTIVITY_RETENTION_DAYS` (90) are pruned at startup, hourly by the console, and by `cleanup-uploads`.
+- **What events contain:** event type, time, account, actor, an opaque byte count, the client address, and for uploads and deletions only whether the item is an image or a video. They never hold media fingerprints, filenames, metadata, tokens or passwords. A failed sign-in for an unknown username stores no username, because the user may have typed a password into that field.
+
 ## Authentication
 
 `POST /auth/login` accepts JSON:

@@ -18,5 +18,5 @@ ENV ENCRAGE_DATABASE_PATH=/data/encrage.sqlite3 \
     ENCRAGE_MEDIA_ROOT=/data/media \
     ENCRAGE_ENV=production
 
-EXPOSE 8000
+EXPOSE 8000 8001
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

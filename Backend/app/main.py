@@ -22,6 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import activity
 from .config import Settings, get_settings
 from .database import Database
 from .schemas import (
@@ -204,6 +205,10 @@ def authenticated_user(
     )
 
 
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
 def _owned_upload(connection: sqlite3.Connection, user_id: str, upload_id: str) -> sqlite3.Row:
     row = connection.execute(
         "SELECT * FROM upload_sessions WHERE upload_id = ? AND user_id = ?",
@@ -375,6 +380,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recover_interrupted_finalizations(database, resolved_settings)
         process_delete_queue(database, resolved_settings)
         cleanup_abandoned_uploads(database, resolved_settings)
+        activity.prune_events(database, resolved_settings.activity_retention_days)
         yield
 
     app = FastAPI(
@@ -433,14 +439,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/auth/login", response_model=TokenResponse, responses=ERROR_RESPONSES)
-    def login(body: LoginRequest) -> dict:
+    def login(body: LoginRequest, request: Request) -> dict:
         with database.connection() as connection:
             user = connection.execute(
-                "SELECT user_id, password_hash, is_active FROM users WHERE username = ? COLLATE NOCASE",
+                "SELECT user_id, username, password_hash, is_active FROM users WHERE username = ? COLLATE NOCASE",
                 (body.username,),
             ).fetchone()
         password_valid = verify_password(user["password_hash"] if user else DUMMY_PASSWORD_HASH, body.password)
         if user is None or not password_valid or not user["is_active"]:
+            # Only name accounts that exist: a mistyped "username" may be a password.
+            activity.record_event_now(
+                database, activity.LOGIN_FAILED, actor="user",
+                user_id=user["user_id"] if user else None,
+                username=user["username"] if user else None,
+                client_ip=_client_ip(request),
+                details=None if user else {"unknown_user": True},
+            )
             raise api_error(401, "invalid_credentials", "Invalid username or password")
         session_id = str(uuid.uuid4())
         access = issue_access_token(resolved_settings, user["user_id"], session_id)
@@ -456,6 +470,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 user_id=user["user_id"],
                 session_id=session_id,
                 refresh=refresh_token,
+            )
+            activity.record_event(
+                connection, activity.LOGIN, actor="user", user_id=user["user_id"],
+                username=user["username"], client_ip=_client_ip(request),
             )
         return _token_response(resolved_settings, access, refresh_token)
 
@@ -528,6 +546,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE session_id = ? AND user_id = ?",
                 (now, user.session_id, user.user_id),
             )
+            activity.record_event(
+                connection, activity.LOGOUT, actor="user", user_id=user.user_id, username=user.username
+            )
         return Response(status_code=204)
 
     @app.post("/auth/change-password", status_code=204, responses=ERROR_RESPONSES)
@@ -569,6 +590,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 WHERE user_id = ? AND session_id != ?
                 """,
                 (now, user.user_id, user.session_id),
+            )
+            activity.record_event(
+                connection, activity.PASSWORD_CHANGED, actor="user", user_id=user.user_id, username=user.username
             )
         return Response(status_code=204)
 
@@ -1091,6 +1115,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if updated.rowcount != 1:
                     raise api_error(413, "quota_exceeded", "Completing the upload would exceed the storage quota")
                 connection.execute("DELETE FROM upload_sessions WHERE upload_id = ?", (upload_id_text,))
+                activity.record_event(
+                    connection, activity.UPLOAD_COMPLETED, actor="user", user_id=user.user_id,
+                    username=user.username, bytes_count=exact_stored_size,
+                    details={"media_type": upload["media_type"]},
+                )
             with database.connection() as connection:
                 media = _owned_media(connection, user.user_id, upload["media_id"])
             return _media_payload(media)
@@ -1276,6 +1305,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             connection.execute(
                 "DELETE FROM media WHERE media_id = ? AND user_id = ?", (str(media_id), user.user_id)
+            )
+            activity.record_event(
+                connection, activity.MEDIA_DELETED, actor="user", user_id=user.user_id,
+                username=user.username, bytes_count=int(media["stored_size_bytes"]),
+                details={"media_type": media["media_type"]},
             )
         process_delete_queue(database, resolved_settings, queue_ids)
         return Response(status_code=204)

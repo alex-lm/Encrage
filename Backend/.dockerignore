@@ -1,0 +1,13 @@
+# Keep secrets, data and local tooling out of the image build context.
+.env
+.env.*
+data/
+.venv/
+.tmp/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+tests/
+deploy/
+*.md

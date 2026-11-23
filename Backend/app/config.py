@@ -33,6 +33,9 @@ class Settings:
     upload_ttl_hours: int = 168
     stream_block_bytes: int = 1024 * 1024
     environment: str = "development"
+    console_session_hours: int = 12
+    activity_retention_days: int = 90
+    console_api_url: str = "http://127.0.0.1:8000"
 
 
 @lru_cache(maxsize=1)
@@ -55,4 +58,7 @@ def get_settings() -> Settings:
         upload_ttl_hours=_positive_int("ENCRAGE_UPLOAD_TTL_HOURS", 168),
         stream_block_bytes=_positive_int("ENCRAGE_STREAM_BLOCK_BYTES", 1024 * 1024),
         environment=environment,
+        console_session_hours=_positive_int("ENCRAGE_CONSOLE_SESSION_HOURS", 12),
+        activity_retention_days=_positive_int("ENCRAGE_ACTIVITY_RETENTION_DAYS", 90),
+        console_api_url=os.getenv("ENCRAGE_CONSOLE_API_URL", "http://127.0.0.1:8000").rstrip("/"),
     )

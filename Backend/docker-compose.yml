@@ -1,0 +1,65 @@
+# Encrage backend: the user API and the admin web console, as two containers from one image.
+# Both share one data directory (SQLite database + encrypted media).
+#
+#   docker compose up -d --build            # build + start both (also restarts on reboot)
+#   docker compose stop                     # stop both, keep containers
+#   docker compose stop encrage-console     # turn only the console off
+#   docker compose start                    # start again
+#   docker compose logs -f                  # follow logs
+#
+# Settings come from ./.env (see .env.example). Deployment keys used in this file:
+#   ENCRAGE_DATA_DIR      host directory that holds encrage.sqlite3 and media/ (default ./data)
+#   ENCRAGE_API_PORT      host port for the app's API            (default 8000)
+#   ENCRAGE_CONSOLE_PORT  host port for the admin web console    (default 8001)
+#   ENCRAGE_API_BIND      host address the API listens on        (default 0.0.0.0 = all interfaces)
+#   ENCRAGE_CONSOLE_BIND  host address the console listens on    (default 0.0.0.0)
+#   ENCRAGE_UID/GID       host user that owns ENCRAGE_DATA_DIR    (default 10001, the image user)
+
+x-encrage-service: &encrage-service
+  build: .
+  image: encrage-backend:latest
+  restart: unless-stopped
+  user: "${ENCRAGE_UID:-10001}:${ENCRAGE_GID:-10001}"
+  env_file: .env
+  volumes:
+    - "${ENCRAGE_DATA_DIR:-./data}:/data"
+  # Give in-flight requests and SQLite commits time to finish on stop.
+  stop_grace_period: 30s
+
+services:
+  encrage-backend:
+    <<: *encrage-service
+    container_name: encrage-backend
+    environment:
+      # Paths inside the container always point at the mounted volume,
+      # whatever the .env says for local (non-Docker) runs.
+      ENCRAGE_DATABASE_PATH: /data/encrage.sqlite3
+      ENCRAGE_MEDIA_ROOT: /data/media
+    ports:
+      - "${ENCRAGE_API_BIND:-0.0.0.0}:${ENCRAGE_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  encrage-console:
+    <<: *encrage-service
+    container_name: encrage-console
+    command: ["uvicorn", "app.console:app", "--host", "0.0.0.0", "--port", "8001", "--proxy-headers"]
+    environment:
+      ENCRAGE_DATABASE_PATH: /data/encrage.sqlite3
+      ENCRAGE_MEDIA_ROOT: /data/media
+      # The console checks API health over the internal compose network.
+      ENCRAGE_CONSOLE_API_URL: http://encrage-backend:8000
+    ports:
+      - "${ENCRAGE_CONSOLE_BIND:-0.0.0.0}:${ENCRAGE_CONSOLE_PORT:-8001}:8001"
+    depends_on:
+      - encrage-backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
